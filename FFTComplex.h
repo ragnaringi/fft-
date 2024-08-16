@@ -1,0 +1,356 @@
+/*
+MIT License
+
+Copyright (c) 2024 Ragnar Hrafnkelsson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files(the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+#pragma once
+
+#include <complex>
+#include <vector>
+
+template <typename T>
+class FFTComplex
+{
+public:
+    //==========================================================================
+    FFTComplex (int size);
+
+    void forward (const T* timeData, std::complex<T>* freqData);
+    void inverse (const std::complex<T>* freqData, T* timeData);
+
+    size_t getSize() const noexcept      { return size; }
+
+protected:
+    //==========================================================================
+    struct Factor { int radix, length; };
+
+    void perform (const std::complex<T>* input, std::complex<T>* output, const size_t, int, Factor*, bool);
+    void butterfly2 (std::complex<T>* output, const size_t, const size_t, std::complex<T>*);
+    void butterfly4 (std::complex<T>* output, const size_t, const size_t, std::complex<T>*, bool);
+    void butterflyGeneric (std::complex<T>* output, const size_t, const size_t, const size_t, std::complex<T>*);
+
+    const size_t size;
+    Factor factors[32];
+    std::vector<std::complex<T>> twiddlesFwd, twiddlesInv;
+};
+
+
+//==============================================================================
+//
+//==============================================================================
+template <typename T>
+FFTComplex<T>::FFTComplex (int fftSize)
+  : size (fftSize)
+{
+    twiddlesFwd.resize (size);
+    twiddlesInv.resize (size);
+
+    const double pi = 3.141592653589793238462643383279502884197169399375105820974944;
+    const double factor = -2 * pi / size;
+
+    for (auto i = 0; i < size; ++i)
+    {
+        cexp (twiddlesFwd.data() + i, factor * i);
+        cexp (twiddlesInv.data() + i, factor * i * -1);
+    }
+
+    int p = 4;
+    int root = std::sqrt ((double) size);
+    Factor* factorsPtr = factors;
+
+    do
+    {
+        while (fftSize % p)
+        {
+            switch (p)
+            {
+                case 4:  p = 2; break;
+                case 2:  p = 3; break;
+                default: p += 2; break;
+            }
+
+            if (p > root)
+                p = fftSize;
+        }
+
+        fftSize /= p;
+
+        auto& factor = *factorsPtr++;
+        factor.radix = p;
+        factor.length = fftSize;
+    } 
+    while (fftSize > 1);
+}
+
+template <typename T>
+void FFTComplex<T>::forward (const T* timeData, std::complex<T>* freqData)
+{
+    perform (reinterpret_cast<const std::complex<T>*> (timeData), freqData, 1, 1, factors, false);
+}
+
+template <typename T>
+void FFTComplex<T>::inverse(const std::complex<T>* freqData, T* timeData)
+{
+    perform (freqData, reinterpret_cast<std::complex<T>*> (timeData), 1, 1, factors, true);
+}
+
+template <typename T>
+void FFTComplex<T>::perform (const std::complex<T>* input, std::complex<T>* output, const size_t stride, int inStride, Factor* factors, bool inverse)
+{
+    const auto& factor = *factors++;
+    const int radix  = factor.radix;
+    const int length = factor.length;
+
+    auto* outBegin = output;
+    const auto* outEnd = outBegin + radix * length;
+
+    if (length == 1)
+    {
+        do
+        {
+            *output = *input;
+            input  += stride * inStride;
+        } 
+        while (++output != outEnd);
+    }
+    else
+    {
+        do
+        {
+            perform (input, output, stride * radix, inStride, factors, inverse);
+            input += stride * inStride;
+        } 
+        while ((output += length) != outEnd);
+    }
+
+    output = outBegin;
+
+    auto* twiddles = inverse ? twiddlesInv.data() : twiddlesFwd.data();
+
+    switch (radix)
+    {
+        case 2:  butterfly2 (output, stride, length, twiddles); break;
+        case 4:  butterfly4 (output, stride, length, twiddles, inverse); break;
+        default: butterflyGeneric (output, stride, radix, length, twiddles); break;
+    }
+}
+
+template <typename T>
+void FFTComplex<T>::butterfly2 (std::complex<T>* output, const size_t stride, const size_t length, std::complex<T>* twiddles)
+{
+    auto* output2 = output + length;
+
+    for (auto i = 0; i < length; ++i)
+    {
+        if constexpr (std::is_integral_v<T>)
+        {
+            cdiv (*output,  2);
+            cdiv (*output2, 2);
+        }
+
+        auto t = cmul (*output2, *twiddles);
+        twiddles += stride;
+        
+        (*output2++) = (*output) - t;
+        (*output++) += t;
+    }
+}
+
+template <typename T>
+void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, const size_t length, std::complex<T>* twiddles, bool inverse)
+{
+    const auto* outEnd = output + length;
+    
+    const size_t length2 = 2 * length;
+    const size_t length3 = 3 * length;
+
+    if constexpr (std::is_integral_v<T>)
+    {
+        do
+        {
+            cdiv (output[length],  4);
+            cdiv (output[length2], 4);
+            cdiv (output[length3], 4);
+            cdiv (*output++, 4);
+        } 
+        while (output != outEnd);
+
+        output = output - length;
+    }
+
+    std::complex<T> *tw1, *tw2, *tw3;
+    tw3 = tw2 = tw1 = twiddles;
+
+    do
+    {
+        auto s0 = cmul (output[length],  *tw1);
+        auto s1 = cmul (output[length2], *tw2);
+        auto s2 = cmul (output[length3], *tw3);
+        auto s3 = s0 + s2;
+        auto s4 = s0 - s2;
+        auto s5 = (*output) - s1;
+
+        (*output) += s1;
+        output[length2] = (*output) - s3;
+        (*output) += s3;
+
+        if (inverse)
+        {
+            output[length]  = { s5.real() - s4.imag(),
+                                s5.imag() + s4.real() };
+            output[length3] = { s5.real() + s4.imag(),
+                                s5.imag() - s4.real() };
+        }
+        else
+        {
+            output[length]  = { s5.real() + s4.imag(),
+                                s5.imag() - s4.real() };
+            output[length3] = { s5.real() - s4.imag(),
+                                s5.imag() + s4.real() };
+        }
+
+        tw1 += stride;
+        tw2 += stride * 2;
+        tw3 += stride * 3;
+    } 
+    while (++output != outEnd);
+}
+
+template <typename T>
+void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stride, const size_t radix, const size_t length, std::complex<T>* twiddles)
+{
+    auto* scratch = (std::complex<T>*) alloca (sizeof (std::complex<T>) * radix);
+
+    if constexpr (std::is_integral_v<T>)
+    {
+        for (auto u = 0; u < length; ++u)
+        {
+            for (int k = u, q1 = 0; q1 < radix; ++q1)
+            {
+                cdiv (output[k], radix);
+                k += length;
+            }
+        }
+    }
+
+    for (auto u = 0; u < length; ++u)
+    {
+        for (auto k = u, q1 = 0; q1 < radix; ++q1)
+        {
+            scratch[q1] = output[k];
+            k += length;
+        }
+
+        for (auto k = u, q1 = 0; q1 < radix; ++q1)
+        {
+            output[k] = scratch[0];
+
+            for (auto twIndex = 0, q = 1; q < radix; ++q)
+            {
+                twIndex += stride * k;
+
+                if (twIndex >= size)
+                    twIndex -= size;
+
+                output[k] += cmul (scratch[q], twiddles[twIndex]);
+            }
+
+            k += length;
+        }
+    }
+}
+
+// Scalar math functions
+template <typename T>
+T sround (T x)
+{
+    static_assert (!std::is_floating_point_v<T>, "type can't be float");
+    static constexpr T FRACBITS = 31;
+    return (T) (x + (1 << (FRACBITS - 1))) >> FRACBITS;
+}
+
+template <typename T>
+static inline T scos (double phase)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return std::cos (phase);
+    else
+        return std::floor (0.5 + std::numeric_limits<T>::max() * std::cos(phase));
+}
+
+template <typename T>
+static inline T ssin (double phase)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return std::sin (phase);
+    else
+        return floor (0.5 + std::numeric_limits<T>::max() * std::sin (phase));
+}
+
+template <typename T>
+static inline T smul (T a, T b)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return a * b;
+    else
+        return sround ((int64_t) a * (int64_t) b);
+}
+
+template <typename T>
+static inline T sdiv (T a, T b)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return a / b;
+    else
+        return smul (a, std::numeric_limits<T>::max() / b);
+}
+
+template <typename T>
+T halve (T x)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return x * T (0.5);
+    else
+        return x >> 1;
+}
+
+// Complex math functions
+template <typename T>
+static inline std::complex<T> cmul (std::complex<T>& a, std::complex<T>& b)
+{
+    return { smul (a.real(), b.real()) - smul (a.imag(), b.imag()),
+             smul (a.real(), b.imag()) + smul (a.imag(), b.real()) };
+}
+
+template <typename T, typename D>
+static inline void cdiv (std::complex<T>& c, D d)
+{
+    c.real (sdiv (c.real(), (T) d));
+    c.imag (sdiv (c.imag(), (T) d));
+}
+
+template <typename T, typename P = double>
+static inline void cexp (std::complex<T>* x, P phase)
+{
+    x->real (scos<T> (phase));
+    x->imag (ssin<T> (phase));
+}
