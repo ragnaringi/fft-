@@ -24,6 +24,7 @@ SOFTWARE.
 
 #pragma once
 
+#include <assert.h>
 #include "FFTComplex.h"
 
 template <typename T>
@@ -52,7 +53,7 @@ protected:
 template <typename T>
 static void initTwiddleTable (std::vector<std::complex<T>>& twiddles, const size_t size, const int inverse)
 {
-    twiddles.resize(size);
+    twiddles.resize (size);
 
     for (int i = 0; i < size; ++i)
     {
@@ -62,8 +63,8 @@ static void initTwiddleTable (std::vector<std::complex<T>>& twiddles, const size
 }
 
 template <typename T>
-FFTReal<T>::FFTReal(int fftSize)
-  : size (fftSize >> 1), fft (size)
+FFTReal<T>::FFTReal (int fftSize)
+  : size (halve (fftSize)), fft (size)
 {
     assert ((size & 1) == 0 && "Real FFT size must be even.");
 
