@@ -24,7 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-#include <assert.h>
+#include <cassert>
 #include "FFTComplex.h"
 
 template <typename T>
@@ -32,7 +32,7 @@ class FFTReal
 {
 public:
     //==========================================================================
-    FFTReal (int size);
+    FFTReal (size_t size);
     
     void forward (const T* timeData, std::complex<T>* freqData);
     void inverse (const std::complex<T>* freqData, T* timeData);
@@ -63,7 +63,7 @@ static void initTwiddleTable (std::vector<std::complex<T>>& twiddles, const size
 }
 
 template <typename T>
-FFTReal<T>::FFTReal (int fftSize)
+FFTReal<T>::FFTReal (size_t fftSize)
   : size (halve (fftSize)), fft (size)
 {
     assert ((size & 1) == 0 && "Real FFT size must be even.");
@@ -85,7 +85,7 @@ void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
             cdiv (tmpbuf[k], 2);
     }
 
-    const auto tdc = tmpbuf[0];
+    auto tdc = tmpbuf[0];
     freqData[0]    = { tdc.real() + tdc.imag(), 0 };
     freqData[size] = { tdc.real() - tdc.imag(), 0 };
 
@@ -93,8 +93,9 @@ void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
     {
         auto s0 = tmpbuf[k];
         auto s1 = std::conj (tmpbuf[size - k]);
-        auto fk = s0 + s1;
-        auto tw = cmul (s0 - s1, twiddlesFwd[k - 1]);
+        auto fk   = s0 + s1;
+        auto fknc = s0 - s1;
+        auto tw = cmul (fknc, twiddlesFwd[k - 1]);
 
         freqData[k]        = { halve (fk.real() + tw.real()),
                                halve (fk.imag() + tw.imag()) };
@@ -122,8 +123,9 @@ void FFTReal<T>::inverse (const std::complex<T>* freqData, T* timeData)
     {
         auto s0 = tmpbuf[k];
         auto s1 = std::conj (tmpbuf[size - k]);
-        auto fk = s0 + s1;
-        auto tw = cmul (s0 - s1, twiddlesInv[k - 1]);
+        auto fk   = s0 + s1;
+        auto fknc = s0 +- s1;
+        auto tw = cmul (fknc, twiddlesInv[k - 1]);
 
         tmpbuf[k]        = fk + tw;
         tmpbuf[size - k] = std::conj (fk - tw);

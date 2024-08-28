@@ -32,7 +32,7 @@ class FFTComplex
 {
 public:
     //==========================================================================
-    FFTComplex (int size);
+    FFTComplex (size_t size);
 
     void forward (const T* timeData, std::complex<T>* freqData);
     void inverse (const std::complex<T>* freqData, T* timeData);
@@ -41,7 +41,7 @@ public:
 
 protected:
     //==========================================================================
-    struct Factor { int radix, length; };
+    struct Factor { size_t radix, length; };
 
     void perform (const std::complex<T>* input, std::complex<T>* output, const size_t, int, Factor*, bool);
     void butterfly2 (std::complex<T>* output, const size_t, const size_t, std::complex<T>*);
@@ -57,8 +57,86 @@ protected:
 //==============================================================================
 //
 //==============================================================================
+
+// Scalar math functions
 template <typename T>
-FFTComplex<T>::FFTComplex (int fftSize)
+T sround (T x)
+{
+    static_assert (!std::is_floating_point_v<T>, "type can't be float");
+    static constexpr T FRACBITS = 31;
+    return (T) (x + (1 << (FRACBITS - 1))) >> FRACBITS;
+}
+
+template <typename T>
+static inline T scos (double phase)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return std::cos (phase);
+    else
+        return std::floor (0.5 + std::numeric_limits<T>::max() * std::cos(phase));
+}
+
+template <typename T>
+static inline T ssin (double phase)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return std::sin (phase);
+    else
+        return floor (0.5 + std::numeric_limits<T>::max() * std::sin (phase));
+}
+
+template <typename T>
+static inline T smul (T a, T b)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return a * b;
+    else
+        return (T) sround ((int64_t) a * (int64_t) b);
+}
+
+template <typename T>
+static inline T sdiv (T a, T b)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return a / b;
+    else
+        return smul (a, std::numeric_limits<T>::max() / b);
+}
+
+template <typename T>
+T halve (T x)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return x * T (0.5);
+    else
+        return x >> 1;
+}
+
+// Complex math functions
+template <typename T>
+static inline std::complex<T> cmul (std::complex<T>& a, std::complex<T>& b)
+{
+    return { smul (a.real(), b.real()) - smul (a.imag(), b.imag()),
+             smul (a.real(), b.imag()) + smul (a.imag(), b.real()) };
+}
+
+template <typename T, typename D>
+static inline void cdiv (std::complex<T>& c, D d)
+{
+    c.real (sdiv (c.real(), (T) d));
+    c.imag (sdiv (c.imag(), (T) d));
+}
+
+template <typename T, typename P = double>
+static inline void cexp (std::complex<T>* x, P phase)
+{
+    x->real (scos<T> (phase));
+    x->imag (ssin<T> (phase));
+}
+
+//==============================================================================
+template <typename T>
+FFTComplex<T>::FFTComplex (size_t fftSize)
   : size (fftSize)
 {
     twiddlesFwd.resize (size);
@@ -73,8 +151,8 @@ FFTComplex<T>::FFTComplex (int fftSize)
         cexp (twiddlesInv.data() + i, factor * i * -1);
     }
 
-    int p = 4;
-    int root = std::sqrt ((double) size);
+    size_t p = 4;
+    size_t root = std::sqrt ((double) size);
     Factor* factorsPtr = factors;
 
     do
@@ -117,8 +195,8 @@ template <typename T>
 void FFTComplex<T>::perform (const std::complex<T>* input, std::complex<T>* output, const size_t stride, int inStride, Factor* factors, bool inverse)
 {
     const auto& factor = *factors++;
-    const int radix  = factor.radix;
-    const int length = factor.length;
+    const auto radix  = factor.radix;
+    const auto length = factor.length;
 
     auto* outBegin = output;
     const auto* outEnd = outBegin + radix * length;
@@ -277,80 +355,4 @@ void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stri
             k += length;
         }
     }
-}
-
-// Scalar math functions
-template <typename T>
-T sround (T x)
-{
-    static_assert (!std::is_floating_point_v<T>, "type can't be float");
-    static constexpr T FRACBITS = 31;
-    return (T) (x + (1 << (FRACBITS - 1))) >> FRACBITS;
-}
-
-template <typename T>
-static inline T scos (double phase)
-{
-    if constexpr (std::is_floating_point_v<T>)
-        return std::cos (phase);
-    else
-        return std::floor (0.5 + std::numeric_limits<T>::max() * std::cos(phase));
-}
-
-template <typename T>
-static inline T ssin (double phase)
-{
-    if constexpr (std::is_floating_point_v<T>)
-        return std::sin (phase);
-    else
-        return floor (0.5 + std::numeric_limits<T>::max() * std::sin (phase));
-}
-
-template <typename T>
-static inline T smul (T a, T b)
-{
-    if constexpr (std::is_floating_point_v<T>)
-        return a * b;
-    else
-        return sround ((int64_t) a * (int64_t) b);
-}
-
-template <typename T>
-static inline T sdiv (T a, T b)
-{
-    if constexpr (std::is_floating_point_v<T>)
-        return a / b;
-    else
-        return smul (a, std::numeric_limits<T>::max() / b);
-}
-
-template <typename T>
-T halve (T x)
-{
-    if constexpr (std::is_floating_point_v<T>)
-        return x * T (0.5);
-    else
-        return x >> 1;
-}
-
-// Complex math functions
-template <typename T>
-static inline std::complex<T> cmul (std::complex<T>& a, std::complex<T>& b)
-{
-    return { smul (a.real(), b.real()) - smul (a.imag(), b.imag()),
-             smul (a.real(), b.imag()) + smul (a.imag(), b.real()) };
-}
-
-template <typename T, typename D>
-static inline void cdiv (std::complex<T>& c, D d)
-{
-    c.real (sdiv (c.real(), (T) d));
-    c.imag (sdiv (c.imag(), (T) d));
-}
-
-template <typename T, typename P = double>
-static inline void cexp (std::complex<T>* x, P phase)
-{
-    x->real (scos<T> (phase));
-    x->imag (ssin<T> (phase));
 }
