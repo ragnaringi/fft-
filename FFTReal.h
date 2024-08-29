@@ -25,6 +25,7 @@ SOFTWARE.
 #pragma once
 
 #include <cassert>
+#include <cstring>
 #include "FFTComplex.h"
 
 template <typename T>
