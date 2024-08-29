@@ -124,7 +124,7 @@ void FFTReal<T>::inverse (const std::complex<T>* freqData, T* timeData)
         auto s0 = tmpbuf[k];
         auto s1 = std::conj (tmpbuf[size - k]);
         auto fk   = s0 + s1;
-        auto fknc = s0 +- s1;
+        auto fknc = s0 - s1;
         auto tw = cmul (fknc, twiddlesInv[k - 1]);
 
         tmpbuf[k]        = fk + tw;
