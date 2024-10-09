@@ -44,7 +44,7 @@ protected:
     //==========================================================================
     const size_t size;
     FFTComplex<T> fft;
-    std::vector<std::complex<T>> twiddlesFwd, twiddlesInv;
+    std::vector<std::complex<T>> twiddlesFwd, twiddlesInv, tempBuffer;
 };
 
 
@@ -56,7 +56,7 @@ static void initTwiddleTable (std::vector<std::complex<T>>& twiddles, const size
 {
     twiddles.resize (size);
 
-    for (int i = 0; i < size; ++i)
+    for (auto i = 0; i < size; ++i)
     {
         const double phase = -3.14159265358979323846264338327 * ((double) (i + 1) / size + 0.5);
         cexp (twiddles.data() + i, phase * inverse);
@@ -71,29 +71,28 @@ FFTReal<T>::FFTReal (size_t fftSize)
 
     initTwiddleTable (twiddlesFwd, size,  1);
     initTwiddleTable (twiddlesInv, size, -1);
+    tempBuffer.resize (size);
 }
 
 template <typename T>
 void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
 {
-    auto* tmpbuf = (std::complex<T>*) alloca (size * sizeof (std::complex<T>));
-
-    fft.forward (timeData, tmpbuf);
+    fft.forward (timeData, tempBuffer.data());
 
     if constexpr (std::is_integral_v<T>)
     {
         for (auto k = 0; k < size; ++k)
-            cdiv (tmpbuf[k], 2);
+            cdiv (tempBuffer[k], 2);
     }
 
-    auto tdc = tmpbuf[0];
+    auto tdc = tempBuffer[0];
     freqData[0]    = { tdc.real() + tdc.imag(), 0 };
     freqData[size] = { tdc.real() - tdc.imag(), 0 };
 
     for (auto k = 1; k <= size / 2; ++k)
     {
-        auto s0 = tmpbuf[k];
-        auto s1 = std::conj (tmpbuf[size - k]);
+        auto s0 = tempBuffer[k];
+        auto s1 = std::conj (tempBuffer[size - k]);
         auto fk   = s0 + s1;
         auto fknc = s0 - s1;
         auto tw = cmul (fknc, twiddlesFwd[k - 1]);
@@ -108,29 +107,27 @@ void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
 template <typename T>
 void FFTReal<T>::inverse (const std::complex<T>* freqData, T* timeData)
 {
-    auto* tmpbuf = (std::complex<T>*) alloca (size * sizeof (std::complex<T>));
-
-    tmpbuf[0] = { freqData[0].real() + freqData[size].real(),
-                  freqData[0].real() - freqData[size].real() };
-    std::memcpy (tmpbuf + 1, freqData + 1, (size - 1) * sizeof (std::complex<T>));
+	tempBuffer[0] = { freqData[0].real() + freqData[size].real(),
+					  freqData[0].real() - freqData[size].real() };
+    std::memcpy (tempBuffer.data() + 1, freqData + 1, (size - 1) * sizeof (std::complex<T>));
 
     if constexpr (std::is_integral_v<T>)
     {
         for (auto k = 0; k < size; k++)
-            cdiv (tmpbuf[k], 2);
+            cdiv (tempBuffer[k], 2);
     }
 
     for (auto k = 1; k <= size / 2; k++)
     {
-        auto s0 = tmpbuf[k];
-        auto s1 = std::conj (tmpbuf[size - k]);
+        auto s0 = tempBuffer[k];
+        auto s1 = std::conj (tempBuffer[size - k]);
         auto fk   = s0 + s1;
         auto fknc = s0 - s1;
         auto tw = cmul (fknc, twiddlesInv[k - 1]);
 
-        tmpbuf[k]        = fk + tw;
-        tmpbuf[size - k] = std::conj (fk - tw);
+        tempBuffer[k]        = fk + tw;
+        tempBuffer[size - k] = std::conj (fk - tw);
     }
 
-    fft.inverse (tmpbuf, timeData);
+    fft.inverse (tempBuffer.data(), timeData);
 }
