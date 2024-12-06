@@ -79,7 +79,7 @@ void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
 {
     fft.forward (timeData, tempBuffer.data());
 
-    if constexpr (std::is_integral_v<T>)
+    if constexpr (fftpp_is_integral<T>)
     {
         for (auto k = 0; k < size; ++k)
             cdiv (tempBuffer[k], 2);
@@ -111,7 +111,7 @@ void FFTReal<T>::inverse (const std::complex<T>* freqData, T* timeData)
 					  freqData[0].real() - freqData[size].real() };
     std::memcpy (tempBuffer.data() + 1, freqData + 1, (size - 1) * sizeof (std::complex<T>));
 
-    if constexpr (std::is_integral_v<T>)
+    if constexpr (fftpp_is_integral<T>)
     {
         for (auto k = 0; k < size; k++)
             cdiv (tempBuffer[k], 2);
