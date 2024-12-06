@@ -26,6 +26,7 @@ SOFTWARE.
 
 #include <complex>
 #include <vector>
+#include <type_traits>
 
 template <typename T>
 class FFTComplex
@@ -58,11 +59,23 @@ protected:
 //
 //==============================================================================
 
+#ifndef __cpp_lib_type_trait_variable_templates
+template <typename T>
+constexpr bool fftpp_is_floating_point = std::is_floating_point<T>::value;
+template <typename T>
+constexpr bool fftpp_is_integral       = std::is_integral<T>::value;
+#else
+template <typename T>
+constexpr bool fftpp_is_floating_point = std::is_floating_point_v<T>;
+template <typename T>
+constexpr bool fftpp_is_integral       = std::is_integral_v<T>;
+#endif
+
 // Scalar math functions
 template <typename T>
 T sround (T x)
 {
-    static_assert (!std::is_floating_point_v<T>, "type can't be float");
+    static_assert (! fftpp_is_floating_point<T>, "type can't be float");
     static constexpr T FRACBITS = 31;
     return (T) (x + (1 << (FRACBITS - 1))) >> FRACBITS;
 }
@@ -70,7 +83,7 @@ T sround (T x)
 template <typename T>
 static inline T scos (double phase)
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (fftpp_is_floating_point<T>)
         return std::cos (phase);
     else
         return std::floor (0.5 + std::numeric_limits<T>::max() * std::cos(phase));
@@ -79,7 +92,7 @@ static inline T scos (double phase)
 template <typename T>
 static inline T ssin (double phase)
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (fftpp_is_floating_point<T>)
         return std::sin (phase);
     else
         return floor (0.5 + std::numeric_limits<T>::max() * std::sin (phase));
@@ -88,7 +101,7 @@ static inline T ssin (double phase)
 template <typename T>
 static inline T smul (T a, T b)
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (fftpp_is_floating_point<T>)
         return a * b;
     else
         return (T) sround ((int64_t) a * (int64_t) b);
@@ -97,7 +110,7 @@ static inline T smul (T a, T b)
 template <typename T>
 static inline T sdiv (T a, T b)
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (fftpp_is_floating_point<T>)
         return a / b;
     else
         return smul (a, std::numeric_limits<T>::max() / b);
@@ -106,7 +119,7 @@ static inline T sdiv (T a, T b)
 template <typename T>
 T halve (T x)
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (fftpp_is_floating_point<T>)
         return x * T (0.5);
     else
         return x >> 1;
@@ -239,7 +252,7 @@ void FFTComplex<T>::butterfly2 (std::complex<T>* output, const size_t stride, co
 
     for (auto i = 0; i < length; ++i)
     {
-        if constexpr (std::is_integral_v<T>)
+        if constexpr (fftpp_is_integral<T>)
         {
             cdiv (*output,  2);
             cdiv (*output2, 2);
@@ -261,7 +274,7 @@ void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, co
     const size_t length2 = 2 * length;
     const size_t length3 = 3 * length;
 
-    if constexpr (std::is_integral_v<T>)
+    if constexpr (fftpp_is_integral<T>)
     {
         do
         {
@@ -318,7 +331,7 @@ void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stri
 {
     auto* scratch = (std::complex<T>*) alloca (sizeof (std::complex<T>) * radix);
 
-    if constexpr (std::is_integral_v<T>)
+    if constexpr (fftpp_is_integral<T>)
     {
         for (auto u = 0; u < length; ++u)
         {
