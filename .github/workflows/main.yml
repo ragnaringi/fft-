@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: write file
-      run: echo -e "#include <iostream>\n#include \"FFTReal.h\"\n\nint main (int argc, char *argv[])\n{\n    FFTReal<float_t> fftF (512);\n    FFTReal<int32_t> fftI (512);\n}" > main.cpp
+      run: echo -e "#include <iostream>\n#include \"FFTReal.h\"\n\nint main (int argc, char *argv[])\n{\n    fftpp::FFTReal<float_t> fftF (512);\n    fftpp::FFTReal<int32_t> fftI (512);\n}" > main.cpp
     - name: compile and run
       run: g++ -std=c++17 main.cpp -o a.out && ./a.out
       
