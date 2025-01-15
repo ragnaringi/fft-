@@ -28,106 +28,117 @@ SOFTWARE.
 #include <cstring>
 #include "FFTComplex.h"
 
-template <typename T>
+namespace fftpp
+{
+
+template <typename T, typename Alloc = std::allocator<T>>
 class FFTReal
 {
 public:
     //==========================================================================
-    FFTReal (size_t size);
+    FFTReal (size_t size, const Alloc& alloc = Alloc());
     
     void forward (const T* timeData, std::complex<T>* freqData);
-    void inverse (const std::complex<T>* freqData, T* timeData);
+    void inverse (const std::complex<T>* freqData, T* timeData, bool inPlace = true);
     
     size_t getSize() const noexcept      { return size * 2; }
-
+    
 protected:
     //==========================================================================
     const size_t size;
-    FFTComplex<T> fft;
-    std::vector<std::complex<T>> twiddlesFwd, twiddlesInv, tempBuffer;
+    FFTComplex<T, Alloc> fft;
+    std::vector<T, Alloc> twiddles;
+    std::complex<T>* twiddlesCplx;
 };
 
 
 //==============================================================================
 //
 //==============================================================================
-template <typename T>
-static void initTwiddleTable (std::vector<std::complex<T>>& twiddles, const size_t size, const int inverse)
-{
-    twiddles.resize (size);
 
+template <typename T, typename Alloc>
+FFTReal<T, Alloc>::FFTReal (size_t fftSize, const Alloc& alloc)
+  : size (halve (fftSize)), fft (size, alloc), twiddles (alloc)
+{
+    assert ((size & 1) == 0 && "Real FFT size must be even.");
+    
+    twiddles.resize (size * 2);
+    
+    twiddlesCplx = reinterpret_cast<std::complex<T>*> (twiddles.data());
+    
     for (auto i = 0; i < size; ++i)
     {
-        const double phase = -3.14159265358979323846264338327 * ((double) (i + 1) / size + 0.5);
-        cexp (twiddles.data() + i, phase * inverse);
+        const double phase = -3.141592653589793238L * ((double) (i + 1) / size + 0.5);
+        cexp (twiddlesCplx + i, phase);
     }
 }
 
-template <typename T>
-FFTReal<T>::FFTReal (size_t fftSize)
-  : size (halve (fftSize)), fft (size)
+template <typename T, typename Alloc>
+void FFTReal<T, Alloc>::forward (const T* timeData, std::complex<T>* freqData)
 {
-    assert ((size & 1) == 0 && "Real FFT size must be even.");
-
-    initTwiddleTable (twiddlesFwd, size,  1);
-    initTwiddleTable (twiddlesInv, size, -1);
-    tempBuffer.resize (size);
-}
-
-template <typename T>
-void FFTReal<T>::forward (const T* timeData, std::complex<T>* freqData)
-{
-    fft.forward (timeData, tempBuffer.data());
-
+    fft.forward (timeData, freqData);
+    
     if constexpr (fftpp_is_integral<T>)
     {
         for (auto k = 0; k < size; ++k)
-            cdiv (tempBuffer[k], 2);
+            cdiv (freqData[k], 2);
     }
-
-    auto tdc = tempBuffer[0];
+    
+    auto tdc = freqData[0];
     freqData[0]    = { tdc.real() + tdc.imag(), 0 };
     freqData[size] = { tdc.real() - tdc.imag(), 0 };
-
+    
     for (auto k = 1; k <= size / 2; ++k)
     {
-        auto s0 = tempBuffer[k];
-        auto s1 = std::conj (tempBuffer[size - k]);
+        auto s0 = freqData[k];
+        auto s1 = std::conj (freqData[size - k]);
         auto fk   = s0 + s1;
         auto fknc = s0 - s1;
-        auto tw = cmul (fknc, twiddlesFwd[k - 1]);
-
+        auto tw = cmul (fknc, twiddlesCplx[k - 1]);
+        
         freqData[k]        = { halve (fk.real() + tw.real()),
                                halve (fk.imag() + tw.imag()) };
         freqData[size - k] = { halve (fk.real() - tw.real()),
                                halve (tw.imag() - fk.imag()) };
     }
+    
+    // Clear negative frequencies
+    std::memset (freqData + size, 0, size * sizeof (std::complex<T>));
 }
 
-template <typename T>
-void FFTReal<T>::inverse (const std::complex<T>* freqData, T* timeData)
+template <typename T, typename Alloc>
+void FFTReal<T, Alloc>::inverse (const std::complex<T>* freqData, T* timeData, bool inPlace)
 {
-	tempBuffer[0] = { freqData[0].real() + freqData[size].real(),
-					  freqData[0].real() - freqData[size].real() };
-    std::memcpy (tempBuffer.data() + 1, freqData + 1, (size - 1) * sizeof (std::complex<T>));
-
+    auto* tempBuffer = const_cast<std::complex<T>*> (freqData);
+    
+    if (! inPlace)
+    {
+        tempBuffer = (std::complex<T>*) alloca (size * sizeof (std::complex<T>));
+        
+        tempBuffer[0] = { freqData[0].real() + freqData[size].real(),
+                          freqData[0].real() - freqData[size].real() };
+        std::memcpy (tempBuffer + 1, freqData + 1, (size - 1) * sizeof (std::complex<T>));
+    }
+    
     if constexpr (fftpp_is_integral<T>)
     {
         for (auto k = 0; k < size; k++)
             cdiv (tempBuffer[k], 2);
     }
-
+    
     for (auto k = 1; k <= size / 2; k++)
     {
         auto s0 = tempBuffer[k];
         auto s1 = std::conj (tempBuffer[size - k]);
         auto fk   = s0 + s1;
         auto fknc = s0 - s1;
-        auto tw = cmul (fknc, twiddlesInv[k - 1]);
-
+        auto tw = cmul (fknc, std::conj (twiddlesCplx[k - 1]));
+        
         tempBuffer[k]        = fk + tw;
         tempBuffer[size - k] = std::conj (fk - tw);
     }
-
-    fft.inverse (tempBuffer.data(), timeData);
+    
+    fft.inverse (tempBuffer, timeData);
 }
+
+} // namespace fftpp

@@ -28,30 +28,33 @@ SOFTWARE.
 #include <vector>
 #include <type_traits>
 
-template <typename T>
+namespace fftpp
+{
+
+template <typename T, typename Alloc = std::allocator<T>>
 class FFTComplex
 {
 public:
     //==========================================================================
-    FFTComplex (size_t size);
-
+    FFTComplex (size_t size, const Alloc& alloc = Alloc());
+    
     void forward (const T* timeData, std::complex<T>* freqData);
     void inverse (const std::complex<T>* freqData, T* timeData);
-
+    
     size_t getSize() const noexcept      { return size; }
-
+    
 protected:
     //==========================================================================
     struct Factor { size_t radix, length; };
-
-    void perform (const std::complex<T>* input, std::complex<T>* output, const size_t, int, Factor*, bool);
-    void butterfly2 (std::complex<T>* output, const size_t, const size_t, std::complex<T>*);
-    void butterfly4 (std::complex<T>* output, const size_t, const size_t, std::complex<T>*, bool);
-    void butterflyGeneric (std::complex<T>* output, const size_t, const size_t, const size_t, std::complex<T>*);
-
+    
+    void perform (const std::complex<T>*, std::complex<T>*, const size_t, int, Factor*, bool);
+    void butterfly2 (std::complex<T>*, const size_t, const size_t, std::complex<T>*);
+    void butterfly4 (std::complex<T>*, const size_t, const size_t, std::complex<T>*, bool);
+    void butterflyGeneric (std::complex<T>*, const size_t, const size_t, const size_t, std::complex<T>*);
+    
     const size_t size;
     Factor factors[32];
-    std::vector<std::complex<T>> twiddlesFwd, twiddlesInv;
+    std::vector<T, Alloc> twiddlesFwd, twiddlesInv;
 };
 
 
@@ -127,7 +130,7 @@ T halve (T x)
 
 // Complex math functions
 template <typename T>
-static inline std::complex<T> cmul (std::complex<T>& a, std::complex<T>& b)
+static inline std::complex<T> cmul (const std::complex<T>& a, const std::complex<T>& b)
 {
     return { smul (a.real(), b.real()) - smul (a.imag(), b.imag()),
              smul (a.real(), b.imag()) + smul (a.imag(), b.real()) };
@@ -148,26 +151,29 @@ static inline void cexp (std::complex<T>* x, P phase)
 }
 
 //==============================================================================
-template <typename T>
-FFTComplex<T>::FFTComplex (size_t fftSize)
-  : size (fftSize)
+template <typename T, typename Alloc>
+FFTComplex<T, Alloc>::FFTComplex (size_t fftSize, const Alloc& alloc)
+  : size (fftSize), twiddlesFwd (alloc), twiddlesInv (alloc)
 {
-    twiddlesFwd.resize (size);
-    twiddlesInv.resize (size);
-
-    const double pi = 3.141592653589793238462643383279502884197169399375105820974944;
+    twiddlesFwd.resize (size * 2);
+    twiddlesInv.resize (size * 2);
+      
+    const double pi = 3.141592653589793238L;
     const double factor = -2 * pi / size;
-
+    
+    auto* twiddlesFwdCplx = reinterpret_cast<std::complex<T>*> (twiddlesFwd.data());
+    auto* twiddlesInvCplx = reinterpret_cast<std::complex<T>*> (twiddlesInv.data());
+    
     for (auto i = 0; i < size; ++i)
     {
-        cexp (twiddlesFwd.data() + i, factor * i);
-        cexp (twiddlesInv.data() + i, factor * i * -1);
+        cexp (twiddlesFwdCplx + i, factor * i);
+        cexp (twiddlesInvCplx + i, factor * i * -1);
     }
-
+    
     size_t p = 4;
     size_t root = std::sqrt ((double) size);
     Factor* factorsPtr = factors;
-
+    
     do
     {
         while (fftSize % p)
@@ -178,49 +184,51 @@ FFTComplex<T>::FFTComplex (size_t fftSize)
                 case 2:  p = 3; break;
                 default: p += 2; break;
             }
-
+            
             if (p > root)
                 p = fftSize;
         }
-
+        
         fftSize /= p;
-
+        
         auto& factor = *factorsPtr++;
         factor.radix = p;
         factor.length = fftSize;
-    } 
+    }
     while (fftSize > 1);
 }
 
-template <typename T>
-void FFTComplex<T>::forward (const T* timeData, std::complex<T>* freqData)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::forward (const T* timeData, std::complex<T>* freqData)
 {
     perform (reinterpret_cast<const std::complex<T>*> (timeData), freqData, 1, 1, factors, false);
 }
 
-template <typename T>
-void FFTComplex<T>::inverse(const std::complex<T>* freqData, T* timeData)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::inverse (const std::complex<T>* freqData, T* timeData)
 {
     perform (freqData, reinterpret_cast<std::complex<T>*> (timeData), 1, 1, factors, true);
 }
 
-template <typename T>
-void FFTComplex<T>::perform (const std::complex<T>* input, std::complex<T>* output, const size_t stride, int inStride, Factor* factors, bool inverse)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::perform (const std::complex<T>* input, std::complex<T>* output,
+                                    const size_t stride, int inStride,
+                                    Factor* factors, bool inverse)
 {
     const auto& factor = *factors++;
     const auto radix  = factor.radix;
     const auto length = factor.length;
-
+    
     auto* outBegin = output;
     const auto* outEnd = outBegin + radix * length;
-
+    
     if (length == 1)
     {
         do
         {
             *output = *input;
             input  += stride * inStride;
-        } 
+        }
         while (++output != outEnd);
     }
     else
@@ -229,14 +237,14 @@ void FFTComplex<T>::perform (const std::complex<T>* input, std::complex<T>* outp
         {
             perform (input, output, stride * radix, inStride, factors, inverse);
             input += stride * inStride;
-        } 
+        }
         while ((output += length) != outEnd);
     }
-
+    
     output = outBegin;
-
-    auto* twiddles = inverse ? twiddlesInv.data() : twiddlesFwd.data();
-
+    
+    auto* twiddles = reinterpret_cast<std::complex<T>*> (inverse ? twiddlesInv.data() : twiddlesFwd.data());
+    
     switch (radix)
     {
         case 2:  butterfly2 (output, stride, length, twiddles); break;
@@ -245,11 +253,12 @@ void FFTComplex<T>::perform (const std::complex<T>* input, std::complex<T>* outp
     }
 }
 
-template <typename T>
-void FFTComplex<T>::butterfly2 (std::complex<T>* output, const size_t stride, const size_t length, std::complex<T>* twiddles)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::butterfly2 (std::complex<T>* output, const size_t stride,
+                                       const size_t length, std::complex<T>* twiddles)
 {
     auto* output2 = output + length;
-
+    
     for (auto i = 0; i < length; ++i)
     {
         if constexpr (fftpp_is_integral<T>)
@@ -257,7 +266,7 @@ void FFTComplex<T>::butterfly2 (std::complex<T>* output, const size_t stride, co
             cdiv (*output,  2);
             cdiv (*output2, 2);
         }
-
+        
         auto t = cmul (*output2, *twiddles);
         twiddles += stride;
         
@@ -266,14 +275,16 @@ void FFTComplex<T>::butterfly2 (std::complex<T>* output, const size_t stride, co
     }
 }
 
-template <typename T>
-void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, const size_t length, std::complex<T>* twiddles, bool inverse)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::butterfly4 (std::complex<T>* output, const size_t stride,
+                                       const size_t length, std::complex<T>* twiddles,
+                                       bool inverse)
 {
     const auto* outEnd = output + length;
     
     const size_t length2 = 2 * length;
     const size_t length3 = 3 * length;
-
+    
     if constexpr (fftpp_is_integral<T>)
     {
         do
@@ -282,15 +293,15 @@ void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, co
             cdiv (output[length2], 4);
             cdiv (output[length3], 4);
             cdiv (*output++, 4);
-        } 
+        }
         while (output != outEnd);
-
+        
         output = output - length;
     }
-
+    
     std::complex<T> *tw1, *tw2, *tw3;
     tw3 = tw2 = tw1 = twiddles;
-
+    
     do
     {
         auto s0 = cmul (output[length],  *tw1);
@@ -299,11 +310,11 @@ void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, co
         auto s3 = s0 + s2;
         auto s4 = s0 - s2;
         auto s5 = (*output) - s1;
-
+        
         (*output) += s1;
         output[length2] = (*output) - s3;
         (*output) += s3;
-
+        
         if (inverse)
         {
             output[length]  = { s5.real() - s4.imag(),
@@ -318,19 +329,21 @@ void FFTComplex<T>::butterfly4 (std::complex<T>* output, const size_t stride, co
             output[length3] = { s5.real() - s4.imag(),
                                 s5.imag() + s4.real() };
         }
-
+        
         tw1 += stride;
         tw2 += stride * 2;
         tw3 += stride * 3;
-    } 
+    }
     while (++output != outEnd);
 }
 
-template <typename T>
-void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stride, const size_t radix, const size_t length, std::complex<T>* twiddles)
+template <typename T, typename Alloc>
+void FFTComplex<T, Alloc>::butterflyGeneric (std::complex<T>* output, const size_t stride,
+                                             const size_t radix, const size_t length,
+                                             std::complex<T>* twiddles)
 {
     auto* scratch = (std::complex<T>*) alloca (sizeof (std::complex<T>) * radix);
-
+    
     if constexpr (fftpp_is_integral<T>)
     {
         for (auto u = 0; u < length; ++u)
@@ -342,7 +355,7 @@ void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stri
             }
         }
     }
-
+    
     for (auto u = 0; u < length; ++u)
     {
         for (auto k = u, q1 = 0; q1 < radix; ++q1)
@@ -350,22 +363,24 @@ void FFTComplex<T>::butterflyGeneric (std::complex<T>* output, const size_t stri
             scratch[q1] = output[k];
             k += length;
         }
-
+        
         for (auto k = u, q1 = 0; q1 < radix; ++q1)
         {
             output[k] = scratch[0];
-
+            
             for (auto twIndex = 0, q = 1; q < radix; ++q)
             {
                 twIndex += stride * k;
-
+                
                 if (twIndex >= size)
                     twIndex -= size;
-
+                
                 output[k] += cmul (scratch[q], twiddles[twIndex]);
             }
-
+            
             k += length;
         }
     }
 }
+
+} // namespace fftpp
